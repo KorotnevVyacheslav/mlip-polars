@@ -37,6 +37,7 @@ exclude = [
     "build",
     "dist",
     "*.egg-info",
+    "mo_*.py",
 ]
 
 [tool.ruff.lint]
@@ -91,6 +92,7 @@ docstring-code-line-length = "dynamic"
 
 [dependency-groups]
 dev = [
+    "marimo>=0.24.2",
     "pre-commit>=4.6.2",
     "ruff>=0.16.7",
 ]
