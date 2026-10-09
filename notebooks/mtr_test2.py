@@ -25,7 +25,7 @@ def _():
     )
 
     df = pl.read_parquet(file_path).head(10)
-    ldf = pl.scan_parquet(file_path).head(2)
+    ldf = pl.scan_parquet(file_path).head(10)
     return Structure, df, json, ldf, mo, pl
 
 
@@ -40,7 +40,6 @@ def _(mo):
 @app.cell
 def _(Structure, json, pl):
     import dataclasses
-
     import ase
     from upet.calculator import UPETCalculator
 
@@ -62,19 +61,13 @@ def _(Structure, json, pl):
         device: str = "cpu"
 
     class CalculatorUPETCalculator(CalculatorBase):
-        def __init__(self, config: CalculatorUPETConfig):
-            super().__init__(config)
-            self.calculator = UPETCalculator(
-                model=config.model,
-                version=config.version,
-                device=config.device,
-            )
-
-        @staticmethod
-        def calc_structure(
-            structure_json: str,
-            calculator: ase.calculators.calculator.Calculator,
+        def calc_structure(self, structure_json: str
         ) -> float:
+            calculator = UPETCalculator(
+            model=self.config.model,
+            version=self.config.version,
+            device=self.config.device,
+        )
             structure = Structure.from_dict(json.loads(structure_json))
             atoms = structure.to_ase_atoms()
             atoms.calc = calculator
@@ -89,7 +82,7 @@ def _(Structure, json, pl):
             return df.with_columns(
                 pl.col("structure")
                 .map_elements(
-                    lambda json_str: self.calc_structure(json_str, self.calculator),
+                    lambda json_str: self.calc_structure(json_str),
                     return_dtype=pl.Struct(
                         {"energy": pl.Float64, "structure_output": pl.String}
                     ),
