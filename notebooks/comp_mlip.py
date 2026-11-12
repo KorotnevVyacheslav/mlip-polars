@@ -17,8 +17,22 @@ def _():
     import torch_sim as ts
     from metatomic_torchsim import MetatomicModel
     from metatomic.torch import load_atomistic_model
+    from comparison import load_result_table, compare_tables
 
-    return Path, dataclass, time, upet
+    return (
+        MetatomicModel,
+        Path,
+        Structure,
+        compare_tables,
+        dataclass,
+        json,
+        load_atomistic_model,
+        load_result_table,
+        pl,
+        time,
+        ts,
+        upet,
+    )
 
 
 @app.cell
@@ -37,8 +51,8 @@ def _(time):
             return result
 
         return wrapper
-
-    return
+    #декоратор позволяющий измерять время работы функций 
+    return (measure_time,)
 
 
 @app.cell
@@ -52,22 +66,52 @@ def _(Path, dataclass):
 
         batch_size: int = 32
         max_steps: int = 1000
-        optimizer: str = "lbfgs"
+        fire_max_steps: int = 200
+        fire_fmax: float = 0.1
+        lbfgs_max_steps: int = 1000
+        lbfgs_fmax: float = 0.01
         device: str = "cpu"
 
     return (RelaxationConfig,)
 
 
-app._unparsable_cell(
-    r"""
+@app.cell
+def _(
+    MetatomicModel,
+    Path,
+    RelaxationConfig,
+    Structure,
+    json,
+    load_atomistic_model,
+    measure_time,
+    pl,
+    ts,
+):
     @measure_time
-    def optimize_batch(sim_state, model, optimizer, max_steps):
+    def optimize_batch(sim_state, model, config: RelaxationConfig):
+        fire_state = ts.optimize(
+        system=sim_state,
+        model=model,
+        optimizer=ts.Optimizer.fire,
+        max_steps=config.fire_max_steps,
+        convergence_fn=ts.generate_force_convergence_fn(
+            force_tol=config.fire_fmax,
+        ) 
+    )
+
+        lbfgs_input = ts.SimState.from_state(fire_state)
+        del fire_state
+
         return ts.optimize(
-            system=sim_state,
+            system=lbfgs_input,
             model=model,
-            optimizer=optimizer,
-            max_steps=max_steps,
+            optimizer=ts.Optimizer.lbfgs,
+            max_steps=config.lbfgs_max_steps,
+            convergence_fn=ts.generate_force_convergence_fn(
+                force_tol=config.lbfgs_fmax,
+            ),
         )
+    #оптимизирование одного батча
 
 
     class BatchRelaxer:
@@ -85,11 +129,9 @@ app._unparsable_cell(
 
         def run(self) -> Path:
             df = (
-                pl.scan_parquet(self.config.dataset_path)
-                .sort("num_sites")
-                .head(128)
+                pl.scan_parquet(self.config.dataset_path).head(128)
             )
-        
+            #создание папки для файлов батчей:
             output_dir = self.config.cache_dir
             output_dir.mkdir(parents=True, exist_ok=True)
             batch_files = []
@@ -97,12 +139,14 @@ app._unparsable_cell(
             for batch_idx, df_batch in enumerate(
                 df.collect_batches(chunk_size=self.config.batch_size)
             ):
+                #проверка нужно ли рассчитывать батч:
                 cache_file = output_dir / f"batch_{batch_idx:04d}.parquet"
-        batch_files.append(str(cache_file))
+                batch_files.append(str(cache_file))
 
-        if cache_file.exists():
-            print(f"Batch {batch_idx} already completed, skipping")
-            continue
+                if cache_file.exists():
+                    print(f"Batch {batch_idx} already completed, skipping")
+                    continue
+    # подготовка структуры:
                 structures = [
                     Structure.from_dict(json.loads(s))
                     for s in df_batch["structure"]
@@ -113,19 +157,18 @@ app._unparsable_cell(
                     device=self.model.device,
                     dtype=self.model.dtype,
                 )
-
+    # релаксация:
                 relaxed_state = optimize_batch(
                     sim_state,
                     self.model,
-                    getattr(ts.Optimizer, self.config.optimizer),
-                    self.config.max_steps,
+                    self.config,
                 )
-
+    # получаем данные
                 batch_time = optimize_batch.last_elapsed
 
                 energies = relaxed_state.energy.detach().cpu().numpy()
                 relaxed_structures = relaxed_state.to_structures()
-
+    # сохраняем датафрейм:
                 result = pl.DataFrame({
                     "material_id": df_batch["material_id"],
                     "energies": energies,
@@ -133,14 +176,14 @@ app._unparsable_cell(
                         structure.to_json()
                         for structure in relaxed_structures
                     ],
-                    "batch_time_s": [batch_time] * len(energies),
+                    "batch_time_s": [batch_time]*len(energies),
                 })
 
                 result.write_parquet(cache_file)
-
+    # удаляем временыне данные 
                 del structures, sim_state, relaxed_state
                 del energies, relaxed_structures, result
-
+    #собираем общую таблицу:
             results = pl.scan_parquet(batch_files)
 
             combined = df.join(
@@ -156,9 +199,23 @@ app._unparsable_cell(
             combined.sink_parquet(self.config.output_path)
 
             return self.config.output_path
-    """,
-    name="_"
-)
+
+    return (BatchRelaxer,)
+
+
+@app.cell
+def _(Path, RelaxationConfig):
+    config = RelaxationConfig(
+        dataset_path=Path("energy_comparision/df_initial.parquet"),
+        model_path=Path("model.pt"),
+        output_path=Path("combined_results_fire_lbfgs.parquet"),
+        cache_dir=Path("results_fire_lbfgs"),
+        batch_size=32,
+        max_steps=1000,
+        device="cpu",
+    )
+    # пути и параметры расчета 
+    return (config,)
 
 
 @app.cell
@@ -173,24 +230,37 @@ def _(config, upet):
 
 
 @app.cell
-def _(Path, RelaxationConfig):
-    config = RelaxationConfig(
-        dataset_path=Path("data/materials.parquet"),
-        model_path=Path("model.pt"),
-        output_path=Path("combined_results.parquet"),
-        cache_dir=Path("results"),
-        batch_size=32,
-        max_steps=1000,
-        optimizer="lbfgs",
-        device="cpu",
-    )
-    return (config,)
-
-
-@app.cell
 def _(BatchRelaxer, config):
     relaxer = BatchRelaxer(config)
     output_path = relaxer.run()
+    return (output_path,)
+
+
+@app.cell
+def _(Path, compare_tables, load_result_table, output_path):
+    mlip_df = load_result_table(
+        output_path,
+        energy_column="energies",
+        structure_column="structure_out",
+    )
+
+    pbe_df = load_result_table( 
+        Path("energy_comparision/df_pbe_high.parquet"),
+        energy_column="energy",
+        structure_column="structure_final",
+    )
+
+    comparison_df, energy_metrics, geometry_metrics = compare_tables(
+        mlip_df,
+        pbe_df,
+    )
+    return energy_metrics, geometry_metrics
+
+
+@app.cell
+def _(energy_metrics, geometry_metrics):
+    print("Энергия:", energy_metrics)
+    print("Геометрия:", geometry_metrics)
     return
 
 
