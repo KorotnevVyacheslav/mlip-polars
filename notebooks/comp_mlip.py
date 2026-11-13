@@ -1,23 +1,42 @@
 import marimo
 
-__generated_with = "0.25.1"
+__generated_with = "0.24.2"
 app = marimo.App(width="medium")
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # Comments
+
+    1. Обрати внимание на вынесенные функции в файл comparison, которые лежит в .notebooks. Попробуй вынести его в .src/mlip_polars., тогда ты сможешь импортировать их через from mlip_polars.my_folder.my_file import my_class, my_func. Это можно посмотреть в любом репозитории, не забывай создавать __init__.py, чуть подробнее можно почитать тут https://docs.python.org/ru/3.14/tutorial/modules.html. Это будет работать, так как в pyproject.toml есть [tool.hatch.build.targets.wheel]
+    packages = ["src/mlip_polars"]
+    2. Попробуй посчитать энергию на атом (ev/atom), то есть надо вытащить из структуры количество элементов Structure.num_sites и делением посчитать. Корректно сравнивать модели по ev/atom, так как это связано с термодинамической стабильностью, что-то близкое к этому есть тут https://www.researchgate.net/post/Is_the_total_energy_per_atom_a_valid_representation_of_chemical_potential_in_DFT_calculations4. Банально, если я в два раза увеличу ячейку, то абсолютное значение энергии и ошибки увеличится в два раза, а ev/atom останется тем же.
+    3. В файле с функциями есть переусложенение и потеря ресурсов. Ты переводишь polars series в мутабельный list (время конвертироования, память, операции с листами дольше) вместо работы с polars. Например, чтобы посчитать среднее   df.select(pl.mean("col_name")). Можешь почитать про логику polars expressions - ты можешь собрать цепочку преобразований, которую потом можно применить к датасету, на этом основана работа LazyFrame, для которого преобразования собираются только при collect()
+    4. Идея с декоратором для замера времени очень хорошая, я бы тебе советовал ее продолжить. Что если у тебя будет класс, у которого есть функция декоратор, которую можно будет навешивать на нужные функции? @timer.measure(name="my_pipeline") или with timer.measure(name="my_pipeline"):. Тогда он сможет хранить у себя информацию о каждом запуске, которую можно будет сохранять (к вопросу об использовании датаклассов). Может быть тогда вычислять не только время?
+    5. У тебя есть функция optimize_batch, которая по логике относится к классу релаксера, почему бы тогда ее туда не поместить? Может понадобиться декоратор @staticmethod. Заодно почитай, зачем нужны @property, @classmethod, @context
+    6. Попробуй скачать draw.io, он бесплатный. Подумай, какую задачу ты решаешь своим кодом, какие независимые логические блоки? Сейчас у тебя три верхнеуровневых шага: загрузка данных, релаксация структур, подсчет метрик. Попробуй оформить это для себя в диаграмму. Прочитай про концепцию SOLID https://synopse.info/forum/viewtopic.php?id=526, это всегда будет нужно. Из этого у тебя должно появиться понимание, зачем нужен конфиг с датаклассом и одинаковые интерфейсы. Например, что нужно изменить в твоем коде, если я извне заранее хочу произвольно менять название колонки в batch_time_s? Ответ: добавить колонку в конфиг, все интерфейсы не тронуты. Что нужно изменить в коде, если я захочу извне менять параметры StructureMatcher? Ответ: вынести все параметры в функцию над ним, то есть изменить интерфейс объекта, который использует блок выше. В целом, данный вопрос довольно глубокий, поэтому я советую прочитать руководство по системному мышлению здесь https://system-school.ru/guides
+    7. Проверь, если заменить чекпоинт UPET на чекпоинт Mattersim, то будет ли работать код?
+    8. Посмотри как пользовать модулем logging, попробуй найти базовую настройку. В классы можно подавать через def __init__(self, logger : logging.Logger, ...): логгер в класс, а потом использовать его как self.logger.info/self.logger.debug и т.д.
+    9. Установи ruff, он есть в группе uv в dev (uv sync --group dev). Используй быстрое сочетание клавиш crtl+b, получишь автоматическое форматирование ячеек с кодом в marimo. Надеюсь, ты установил pre-commit, он должен перед каждым коммитом форматировать код к единому формату
+    """)
 
 
 @app.cell
 def _():
+    import json
     import time
     from dataclasses import dataclass
     from pathlib import Path
-    import json
+
+    import marimo as mo
     import polars as pl
-    from pymatgen.core import Structure
-    import upet
-    import ase.build
     import torch_sim as ts
-    from metatomic_torchsim import MetatomicModel
+    import upet
+    from comparison import compare_tables, load_result_table
     from metatomic.torch import load_atomistic_model
-    from comparison import load_result_table, compare_tables
+    from metatomic_torchsim import MetatomicModel
+    from pymatgen.core import Structure
 
     return (
         MetatomicModel,
@@ -28,6 +47,7 @@ def _():
         json,
         load_atomistic_model,
         load_result_table,
+        mo,
         pl,
         time,
         ts,
@@ -38,7 +58,6 @@ def _():
 @app.cell
 def _(time):
     from functools import wraps
-
 
     def measure_time(func):
         @wraps(func)
@@ -51,7 +70,8 @@ def _(time):
             return result
 
         return wrapper
-    #декоратор позволяющий измерять время работы функций 
+
+    # декоратор позволяющий измерять время работы функций
     return (measure_time,)
 
 
@@ -90,14 +110,14 @@ def _(
     @measure_time
     def optimize_batch(sim_state, model, config: RelaxationConfig):
         fire_state = ts.optimize(
-        system=sim_state,
-        model=model,
-        optimizer=ts.Optimizer.fire,
-        max_steps=config.fire_max_steps,
-        convergence_fn=ts.generate_force_convergence_fn(
-            force_tol=config.fire_fmax,
-        ) 
-    )
+            system=sim_state,
+            model=model,
+            optimizer=ts.Optimizer.fire,
+            max_steps=config.fire_max_steps,
+            convergence_fn=ts.generate_force_convergence_fn(
+                force_tol=config.fire_fmax,
+            ),
+        )
 
         lbfgs_input = ts.SimState.from_state(fire_state)
         del fire_state
@@ -111,16 +131,14 @@ def _(
                 force_tol=config.lbfgs_fmax,
             ),
         )
-    #оптимизирование одного батча
 
+    # оптимизирование одного батча
 
     class BatchRelaxer:
         def __init__(self, config: RelaxationConfig):
             self.config = config
 
-            atomistic_model = load_atomistic_model(
-                str(self.config.model_path)
-            )
+            atomistic_model = load_atomistic_model(str(self.config.model_path))
 
             self.model = MetatomicModel(
                 atomistic_model,
@@ -128,10 +146,8 @@ def _(
             )
 
         def run(self) -> Path:
-            df = (
-                pl.scan_parquet(self.config.dataset_path).head(128)
-            )
-            #создание папки для файлов батчей:
+            df = pl.scan_parquet(self.config.dataset_path).head(128)
+            # создание папки для файлов батчей:
             output_dir = self.config.cache_dir
             output_dir.mkdir(parents=True, exist_ok=True)
             batch_files = []
@@ -139,17 +155,16 @@ def _(
             for batch_idx, df_batch in enumerate(
                 df.collect_batches(chunk_size=self.config.batch_size)
             ):
-                #проверка нужно ли рассчитывать батч:
+                # проверка нужно ли рассчитывать батч:
                 cache_file = output_dir / f"batch_{batch_idx:04d}.parquet"
                 batch_files.append(str(cache_file))
 
                 if cache_file.exists():
                     print(f"Batch {batch_idx} already completed, skipping")
                     continue
-    # подготовка структуры:
+                # подготовка структуры:
                 structures = [
-                    Structure.from_dict(json.loads(s))
-                    for s in df_batch["structure"]
+                    Structure.from_dict(json.loads(s)) for s in df_batch["structure"]
                 ]
 
                 sim_state = ts.initialize_state(
@@ -157,33 +172,34 @@ def _(
                     device=self.model.device,
                     dtype=self.model.dtype,
                 )
-    # релаксация:
+                # релаксация:
                 relaxed_state = optimize_batch(
                     sim_state,
                     self.model,
                     self.config,
                 )
-    # получаем данные
+                # получаем данные
                 batch_time = optimize_batch.last_elapsed
 
                 energies = relaxed_state.energy.detach().cpu().numpy()
                 relaxed_structures = relaxed_state.to_structures()
-    # сохраняем датафрейм:
-                result = pl.DataFrame({
-                    "material_id": df_batch["material_id"],
-                    "energies": energies,
-                    "structure_out": [
-                        structure.to_json()
-                        for structure in relaxed_structures
-                    ],
-                    "batch_time_s": [batch_time]*len(energies),
-                })
+                # сохраняем датафрейм:
+                result = pl.DataFrame(
+                    {
+                        "material_id": df_batch["material_id"],
+                        "energies": energies,
+                        "structure_out": [
+                            structure.to_json() for structure in relaxed_structures
+                        ],
+                        "batch_time_s": [batch_time] * len(energies),
+                    }
+                )
 
                 result.write_parquet(cache_file)
-    # удаляем временыне данные 
+                # удаляем временыне данные
                 del structures, sim_state, relaxed_state
                 del energies, relaxed_structures, result
-    #собираем общую таблицу:
+            # собираем общую таблицу:
             results = pl.scan_parquet(batch_files)
 
             combined = df.join(
@@ -192,9 +208,7 @@ def _(
                 how="left",
             )
 
-            self.config.output_path.parent.mkdir(
-                parents=True, exist_ok=True
-            )
+            self.config.output_path.parent.mkdir(parents=True, exist_ok=True)
 
             combined.sink_parquet(self.config.output_path)
 
@@ -214,7 +228,7 @@ def _(Path, RelaxationConfig):
         max_steps=1000,
         device="cpu",
     )
-    # пути и параметры расчета 
+    # пути и параметры расчета
     return (config,)
 
 
@@ -226,7 +240,6 @@ def _(config, upet):
         version="1.6.0",
         output=str(config.model_path),
     )
-    return
 
 
 @app.cell
@@ -244,7 +257,7 @@ def _(Path, compare_tables, load_result_table, output_path):
         structure_column="structure_out",
     )
 
-    pbe_df = load_result_table( 
+    pbe_df = load_result_table(
         Path("energy_comparision/df_pbe_high.parquet"),
         energy_column="energy",
         structure_column="structure_final",
@@ -261,7 +274,13 @@ def _(Path, compare_tables, load_result_table, output_path):
 def _(energy_metrics, geometry_metrics):
     print("Энергия:", energy_metrics)
     print("Геометрия:", geometry_metrics)
-    return
+
+
+@app.cell
+def _():
+    import marimo as mo
+
+    return (mo,)
 
 
 if __name__ == "__main__":
