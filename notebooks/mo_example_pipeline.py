@@ -4,8 +4,33 @@ __generated_with = "0.24.2"
 app = marimo.App(width="medium")
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # TODO
+
+    1. Собрать класс Pipeline
+    2. dataclass to/from dict/json (сам/mashumaro)
+    3. Разнести по модулям
+    4. main.py: config.json, data -> output (upet)
+    5. pyproject.toml : mace/mattersim/upet - different groups
+    6. install podman
+    7. посмотреть новый репозиторий и попробовать его запустить
+    8*. Написать похожий файл Dockerfile и протестить контейнер
+    """)
+    return
+
+
 @app.cell
 def _():
+    import marimo as mo
+
+    return (mo,)
+
+
+@app.cell
+def _():
+
     from typing import Any
     import logging
     from dataclasses import dataclass, field
@@ -24,18 +49,20 @@ def _():
 
 
 @app.cell
-def _(dataclass, logging, pl):
-    @dataclass
-    class DataLoaderConfig:
-        path: str = ""
+def _():
+    # @dataclass
+    # class DataLoaderConfig:
+    #     path: str = ""
 
-    class DataLoader:
-        def __init__(self, config: DataLoaderConfig, logger: logging.Logger):
-            self.config = config
-            self.logger = logger
+    # class DataLoader:
+    #     def __init__(self, config: DataLoaderConfig, logger: logging.Logger):
+    #         self.config = config
+    #         self.logger = logger
 
-        def run(self) -> pl.LazyFrame:
-            return pl.scan_parquet(self.config.path)
+    #     def run(self) -> pl.LazyFrame:
+    #         return pl.scan_parquet(self.config.path)
+
+    from mlip_polars.tmp.loader import DataLoader, DataLoaderConfig
 
     return DataLoader, DataLoaderConfig
 
@@ -278,6 +305,13 @@ def _(
 @app.cell
 def _():
     return
+
+
+@app.cell
+def _():
+    import marimo as mo
+
+    return (mo,)
 
 
 if __name__ == "__main__":
